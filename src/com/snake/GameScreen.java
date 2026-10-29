@@ -268,6 +268,13 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
         }
     }
 
+    @Override
+    public void onRestartRequested() {
+        // 结束画面上的空格 / Enter / R。必须走 restart() 而不是 panel.reset()，
+        // 否则 settled 还停在死亡时的 true，新局的猪头对话和商店都会被拒绝。
+        restart();
+    }
+
     // ---- 暂停菜单 ----
 
     public void openMenu() {
@@ -418,6 +425,9 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
         menuOpen = false;
         pauseMenu.setVisible(false);
         panel.reset();
+        // reset() 已经清了 paused，这里显式再清一次：
+        // 从暂停菜单重开时浮层刚刚关掉，避免任何残留状态让新局卡住。
+        panel.setPaused(false);
         refreshLabels();
         panel.requestFocusInWindow();
     }

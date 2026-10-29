@@ -27,6 +27,11 @@ public final class SaveState {
     public boolean pigDropped;
     /** 当前猪头位置；已被碰到或尚未生成时为 null。 */
     public Point pigPos;
+    public ArrayList<LargeVirus> largeViruses;
+    public ArrayList<Point> smallViruses;
+    /** 小病毒移动相位与病毒伤害免疫剩余回合。 */
+    public int virusTick;
+    public int virusInvulnerableTicks;
     public int score;
     /** 本局开始的时刻，用于算存活时长。 */
     public long startedAt;
@@ -43,6 +48,8 @@ public final class SaveState {
         body = new ArrayList<Point>();
         pending = new ArrayList<Direction>();
         foods = new ArrayList<Point>();
+        largeViruses = new ArrayList<LargeVirus>();
+        smallViruses = new ArrayList<Point>();
         startedAt = System.currentTimeMillis();
         savedAt = startedAt;
     }
@@ -127,6 +134,10 @@ public final class SaveState {
         if (pigPos != null) {
             sb.append("&pig=").append(pigPos.x).append(',').append(pigPos.y);
         }
+        sb.append("&lv=").append(largeViruses());
+        sb.append("&sv=").append(points(smallViruses));
+        sb.append("&vt=").append(virusTick);
+        sb.append("&vi=").append(virusInvulnerableTicks);
         return sb.toString();
     }
 
@@ -172,6 +183,10 @@ public final class SaveState {
             st.shopUnlocked = "1".equals(m.get("shop"));
             st.pigDropped = "1".equals(m.get("pigSpawned"));
             st.pigPos = parsePoint(m.get("pig"));
+            st.largeViruses = parseLargeViruses(m.get("lv"));
+            st.smallViruses = parsePoints(m.get("sv"));
+            st.virusTick = parseNonNegative(m.get("vt"));
+            st.virusInvulnerableTicks = parseNonNegative(m.get("vi"));
 
             // 存档写坏时不能返回一个半残状态，那会让恢复后的游戏直接崩。
             if (st.body.isEmpty()) {
@@ -208,6 +223,38 @@ public final class SaveState {
                     Long.parseLong(item.substring(c + 1))));
         }
         return out;
+    }
+
+    private String largeViruses() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < largeViruses.size(); i++) {
+            LargeVirus v = largeViruses.get(i);
+            if (i > 0) {
+                sb.append('|');
+            }
+            sb.append(v.topLeft.x).append(',').append(v.topLeft.y).append(',').append(v.size);
+        }
+        return sb.toString();
+    }
+
+    private static ArrayList<LargeVirus> parseLargeViruses(String s) {
+        ArrayList<LargeVirus> out = new ArrayList<LargeVirus>();
+        if (s == null || s.isEmpty()) {
+            return out;
+        }
+        for (String item : s.split("\\|")) {
+            String[] parts = item.split(",");
+            if (parts.length != 3) {
+                continue;
+            }
+            out.add(new LargeVirus(new Point(Long.parseLong(parts[0]),
+                    Long.parseLong(parts[1])), Integer.parseInt(parts[2])));
+        }
+        return out;
+    }
+
+    private static int parseNonNegative(String s) {
+        return s == null || s.isEmpty() ? 0 : Math.max(0, Integer.parseInt(s));
     }
 
     private static Point parsePoint(String s) {

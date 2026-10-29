@@ -24,7 +24,7 @@ import javax.swing.Timer;
  *
  * 支持两种地图：
  * - 经典有限：固定 cols×rows 棋盘，撞墙死或穿墙（可配），相机把棋盘摆在正中。
- * - 无尽无限：没有边界，相机永远把蛇头放在画面中央，食物按可见区域自动补充。
+ * - 无尽无限：没有边界，相机永远把蛇头放在画面中央，食物和病毒按可见区域自动补充。
  *
  * 皮肤预览页与主菜单背景都复用这个类跑 demo 模式，所以演示画的就是真实渲染效果。
  */
@@ -43,6 +43,13 @@ public class GamePanel extends JPanel {
     private static final int FOOD_SPIRAL_LIMIT = 200;
     /** 无尽模式按可见面积补食物：每 40 个可见格 1 个。 */
     private static final int FOOD_CELLS_PER_FOOD = 40;
+    private static final int LARGE_VIRUS_CELLS_PER = 280;
+    private static final int SMALL_VIRUS_CELLS_PER = 400;
+    private static final int VIRUS_SPAWN_ATTEMPTS = 80;
+    private static final int VIRUS_VIEW_MARGIN = 12;
+    private static final int LARGE_VIRUS_SAFE_DISTANCE = 8;
+    private static final int SMALL_VIRUS_SAFE_DISTANCE = 6;
+    private static final int VIRUS_IMMUNITY_TICKS = 4;
 
     /**
      * 面板与外层窗口之间的回调。全部给默认实现，
@@ -64,6 +71,13 @@ public class GamePanel extends JPanel {
         default void onEscape() {
         }
 
+        /**
+         * 结束画面按空格 / Enter / R。重开必须交给外层，
+         * 否则 GameScreen 里结算过的状态（settled 等）不会复位。
+         */
+        default void onRestartRequested() {
+        }
+
         default void onGameOver(int score, int length, boolean filled) {
         }
     }
@@ -74,6 +88,8 @@ public class GamePanel extends JPanel {
 
     private final List<Point> body = new ArrayList<Point>();
     private final List<Point> foods = new ArrayList<Point>();
+    private final List<LargeVirus> largeViruses = new ArrayList<LargeVirus>();
+    private final List<Point> smallViruses = new ArrayList<Point>();
     /** 待处理的方向输入，最多缓存两个，避免一帧内连续急转撞到自己。 */
     private final Deque<Direction> pending = new ArrayDeque<Direction>(2);
     private final Random random = new Random();
@@ -93,6 +109,9 @@ public class GamePanel extends JPanel {
     private Point pigPos;
     /** 当前存档是否已经解锁商店。 */
     private boolean shopUnlocked;
+    /** 小病毒隔回合一动；virusTick 在 0 和 1 之间切换。 */
+    private int virusTick;
+    private int virusInvulnerableTicks;
     private long startedAt = System.currentTimeMillis();
 
     private int originX;
@@ -273,6 +292,8 @@ public class GamePanel extends JPanel {
     public void reset() {
         body.clear();
         foods.clear();
+        largeViruses.clear();
+        smallViruses.clear();
         pending.clear();
         if (config.mode == GameConfig.Mode.CLASSIC) {
             long sx = config.cols / 2;
@@ -292,8 +313,11 @@ public class GamePanel extends JPanel {
         pigDropped = false;
         pigPos = null;
         shopUnlocked = false;
+        virusTick = 0;
+        virusInvulnerableTicks = 0;
         startedAt = System.currentTimeMillis();
         syncCamera();
+        fillViruses();
         fillFoods();
         notifyScore();
         repaint();
@@ -311,6 +335,10 @@ public class GamePanel extends JPanel {
         body.addAll(s.body);
         foods.clear();
         foods.addAll(s.foods);
+        largeViruses.clear();
+        largeViruses.addAll(s.largeViruses);
+        smallViruses.clear();
+        smallViruses.addAll(s.smallViruses);
         pending.clear();
         pending.addAll(s.pending);
 
@@ -320,6 +348,8 @@ public class GamePanel extends JPanel {
         shopUnlocked = s.shopUnlocked;
         pigDropped = s.pigDropped;
         pigPos = s.pigPos;
+        virusTick = s.virusTick & 1;
+        virusInvulnerableTicks = Math.max(0, s.virusInvulnerableTicks);
         startedAt = s.startedAt;
         // 计时器要跑起来，但先暂停：玩家是从菜单点进来的，
         // 不给反应时间直接开跑必然猝死。之后由「继续游戏」解除暂停。
@@ -327,6 +357,7 @@ public class GamePanel extends JPanel {
         setPaused(true);
         syncCamera();
         if (config.mode == GameConfig.Mode.ENDLESS) {
+            fillViruses();
             fillFoods();
         }
         if (shopUnlocked) {
@@ -340,7 +371,8 @@ public class GamePanel extends JPanel {
                 pigDropped = false;
             }
             if (pigPos != null && (!insideBoard(pigPos)
-                    || body.contains(pigPos) || foods.contains(pigPos))) {
+                    || body.contains(pigPos) || foods.contains(pigPos)
+                    || largeVirusAt(pigPos) != null || smallViruses.contains(pigPos))) {
                 pigPos = null;
                 pigDropped = false;
             }
@@ -365,6 +397,10 @@ public class GamePanel extends JPanel {
         s.shopUnlocked = shopUnlocked;
         s.pigDropped = pigDropped;
         s.pigPos = pigPos;
+        s.largeViruses = new ArrayList<LargeVirus>(largeViruses);
+        s.smallViruses = new ArrayList<Point>(smallViruses);
+        s.virusTick = virusTick;
+        s.virusInvulnerableTicks = virusInvulnerableTicks;
         s.score = score;
         s.startedAt = startedAt;
         s.savedAt = System.currentTimeMillis();
@@ -390,7 +426,7 @@ public class GamePanel extends JPanel {
         }
         if (gameOver) {
             if (key == KeyEvent.VK_SPACE || key == KeyEvent.VK_ENTER || key == KeyEvent.VK_R) {
-                reset();
+                listener.onRestartRequested();
             }
             e.consume();
             return;
@@ -468,6 +504,9 @@ public class GamePanel extends JPanel {
     }
 
     private void step() {
+        if (config.mode == GameConfig.Mode.ENDLESS) {
+            virusTick = 1 - virusTick;
+        }
         Point next = body.get(0).translate(dir);
         Point newHead = enterBoard(next);
         if (newHead == null) {
@@ -483,6 +522,21 @@ public class GamePanel extends JPanel {
                 die();
                 return;
             }
+        }
+
+        if (config.mode == GameConfig.Mode.ENDLESS
+                && virusInvulnerableTicks == 0 && largeVirusAt(newHead) != null) {
+            if (!hitLargeVirus()) {
+                return;
+            }
+            // 击退落点也可能恰好是猪头，仍按正常接触触发剧情。
+            pigHit = pigPos != null && pigPos.equals(body.get(0));
+            if (pigHit) {
+                pigPos = null;
+                pigDropped = true;
+            }
+            finishStep(false, pigHit, true);
+            return;
         }
 
         body.add(0, newHead);
@@ -501,7 +555,28 @@ public class GamePanel extends JPanel {
             pigPos = null;
             pigDropped = true;
         }
+
+        boolean virusDamaged = false;
+        if (config.mode == GameConfig.Mode.ENDLESS
+                && virusInvulnerableTicks == 0 && smallViruses.remove(newHead)) {
+            virusDamaged = true;
+            if (!shrinkSnake(1)) {
+                return;
+            }
+        } else if (config.mode == GameConfig.Mode.ENDLESS && virusTick == 0) {
+            virusDamaged = moveSmallViruses();
+            if (gameOver) {
+                return;
+            }
+        }
+        finishStep(growing, pigHit, virusDamaged);
+    }
+
+    private void finishStep(boolean growing, boolean pigHit, boolean virusDamaged) {
         syncCamera();
+        if (config.mode == GameConfig.Mode.ENDLESS) {
+            fillViruses();
+        }
         if (growing || config.mode == GameConfig.Mode.ENDLESS) {
             fillFoods();
         }
@@ -513,6 +588,9 @@ public class GamePanel extends JPanel {
         repaint();
         if (pigHit && !demo) {
             listener.onPigEncounter();
+        }
+        if (!virusDamaged && virusInvulnerableTicks > 0) {
+            virusInvulnerableTicks--;
         }
     }
 
@@ -541,6 +619,39 @@ public class GamePanel extends JPanel {
         gameOver = true;
         repaint();
         listener.onGameOver(score, body.size(), isFilled());
+    }
+
+    private boolean hitLargeVirus() {
+        int loss = 3 + random.nextInt(3);
+        int distance = 3 + random.nextInt(3);
+        if (!shrinkSnake(loss)) {
+            return false;
+        }
+        pending.clear();
+        // Point 不可变，逐节替换为整体平移后的坐标，蛇身形状不会散架。
+        for (int i = 0; i < body.size(); i++) {
+            Point p = body.get(i);
+            body.set(i, new Point(p.x - dir.dx * (long) distance,
+                    p.y - dir.dy * (long) distance));
+        }
+        return true;
+    }
+
+    /** 从蛇尾削减长度；返回 false 表示已经降至 0 格并结束本局。 */
+    private boolean shrinkSnake(int loss) {
+        int remaining = body.size() - loss;
+        if (remaining <= 0) {
+            body.clear();
+            notifyScore();
+            die();
+            return false;
+        }
+        while (body.size() > remaining) {
+            body.remove(body.size() - 1);
+        }
+        virusInvulnerableTicks = VIRUS_IMMUNITY_TICKS;
+        notifyScore();
+        return true;
     }
 
     private void notifyScore() {
@@ -694,7 +805,211 @@ public class GamePanel extends JPanel {
                 return false;
             }
         }
+        if (largeVirusAt(p) != null || smallViruses.contains(p)) {
+            return false;
+        }
         return pigPos == null || !pigPos.equals(p);
+    }
+
+    // ---- 病毒 ----
+
+    private void fillViruses() {
+        if (config.mode != GameConfig.Mode.ENDLESS || body.isEmpty()
+                || getWidth() <= 0 || getHeight() <= 0) {
+            return;
+        }
+        pruneVirusesAwayFromView();
+        int cells = viewCols() * viewRows();
+        int largeTarget = GameConfig.clamp(cells / LARGE_VIRUS_CELLS_PER, 2, 4);
+        int smallTarget = GameConfig.clamp(cells / SMALL_VIRUS_CELLS_PER, 2, 3);
+        while (largeViruses.size() < largeTarget) {
+            if (!spawnLargeVirus()) {
+                break;
+            }
+        }
+        while (smallViruses.size() < smallTarget) {
+            if (!spawnSmallVirus()) {
+                break;
+            }
+        }
+    }
+
+    private void pruneVirusesAwayFromView() {
+        largeViruses.removeIf(v -> !inVirusRange(v.topLeft, v.size));
+        smallViruses.removeIf(p -> !inVirusRange(p, 1));
+    }
+
+    private boolean inVirusRange(Point p, int cells) {
+        int x = screenX(p);
+        int y = screenY(p);
+        int margin = VIRUS_VIEW_MARGIN * CELL;
+        int pixels = cells * CELL;
+        return x < getWidth() + margin && x + pixels > -margin
+                && y < getHeight() + margin && y + pixels > -margin;
+    }
+
+    private boolean spawnLargeVirus() {
+        Point head = body.get(0);
+        int size = LargeVirus.MIN_SIZE
+                + random.nextInt(LargeVirus.MAX_SIZE - LargeVirus.MIN_SIZE + 1);
+        int rx = viewCols() / 2 + 2;
+        int ry = viewRows() / 2 + 2;
+        long x0 = head.x - rx;
+        long x1 = head.x + rx - size + 1;
+        long y0 = head.y - ry;
+        long y1 = head.y + ry - size + 1;
+        if (x1 < x0 || y1 < y0) {
+            return false;
+        }
+        int spanX = (int) (x1 - x0 + 1);
+        int spanY = (int) (y1 - y0 + 1);
+        for (int i = 0; i < VIRUS_SPAWN_ATTEMPTS; i++) {
+            if (trySpawnLargeVirus(new Point(x0 + random.nextInt(spanX),
+                    y0 + random.nextInt(spanY)), size)) {
+                return true;
+            }
+        }
+        // 随机尝试在拥挤视野里可能漏掉合法空位，最后用确定顺序把所有尺寸扫一遍。
+        for (int fallbackSize = LargeVirus.MIN_SIZE;
+             fallbackSize <= LargeVirus.MAX_SIZE; fallbackSize++) {
+            long fallbackX1 = head.x + rx - fallbackSize + 1;
+            long fallbackY1 = head.y + ry - fallbackSize + 1;
+            for (long x = x0; x <= fallbackX1; x++) {
+                for (long y = y0; y <= fallbackY1; y++) {
+                    if (trySpawnLargeVirus(new Point(x, y), fallbackSize)) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean trySpawnLargeVirus(Point topLeft, int size) {
+        LargeVirus candidate = new LargeVirus(topLeft, size);
+        if (!largeVirusPlacementFree(candidate)) {
+            return false;
+        }
+        largeViruses.add(candidate);
+        return true;
+    }
+
+    private boolean largeVirusPlacementFree(LargeVirus candidate) {
+        if (!virusFullyVisible(candidate)) {
+            return false;
+        }
+        Point head = body.get(0);
+        for (int dx = 0; dx < candidate.size; dx++) {
+            for (int dy = 0; dy < candidate.size; dy++) {
+                Point p = new Point(candidate.topLeft.x + dx, candidate.topLeft.y + dy);
+                if (chebyshev(p, head) < LARGE_VIRUS_SAFE_DISTANCE || !isFree(p)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private boolean virusFullyVisible(LargeVirus v) {
+        int x = screenX(v.topLeft);
+        int y = screenY(v.topLeft);
+        int pixels = v.size * CELL;
+        return x >= 0 && y >= 0 && x + pixels <= getWidth() && y + pixels <= getHeight();
+    }
+
+    private boolean spawnSmallVirus() {
+        Point head = body.get(0);
+        int rx = viewCols() / 2 + 2;
+        int ry = viewRows() / 2 + 2;
+        int spanX = rx * 2 + 1;
+        int spanY = ry * 2 + 1;
+        for (int i = 0; i < VIRUS_SPAWN_ATTEMPTS; i++) {
+            Point p = new Point(head.x - rx + random.nextInt(spanX),
+                    head.y - ry + random.nextInt(spanY));
+            if (trySpawnSmallVirus(p)) {
+                return true;
+            }
+        }
+        for (long x = head.x - rx; x <= head.x + rx; x++) {
+            for (long y = head.y - ry; y <= head.y + ry; y++) {
+                if (trySpawnSmallVirus(new Point(x, y))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean trySpawnSmallVirus(Point p) {
+        if (!inView(p) || chebyshev(p, body.get(0)) < SMALL_VIRUS_SAFE_DISTANCE || !isFree(p)) {
+            return false;
+        }
+        smallViruses.add(p);
+        return true;
+    }
+
+    private LargeVirus largeVirusAt(Point p) {
+        for (LargeVirus v : largeViruses) {
+            if (v.contains(p)) {
+                return v;
+            }
+        }
+        return null;
+    }
+
+    /** 小病毒每两个回合走一格，目标取蛇头前方两格，形成拦截而不是只追尾巴。 */
+    private boolean moveSmallViruses() {
+        if (body.isEmpty()) {
+            return false;
+        }
+        Point head = body.get(0);
+        Point target = head.translate(dir).translate(dir);
+        for (int i = 0; i < smallViruses.size(); i++) {
+            Point current = smallViruses.get(i);
+            Point best = current;
+            long bestDistance = manhattan(current, target);
+            for (Direction d : Direction.values()) {
+                Point candidate = current.translate(d);
+                if (!smallVirusCanEnter(candidate, i)) {
+                    continue;
+                }
+                long distance = manhattan(candidate, target);
+                if (distance < bestDistance) {
+                    best = candidate;
+                    bestDistance = distance;
+                }
+            }
+            smallViruses.set(i, best);
+            if (best.equals(head) && virusInvulnerableTicks == 0) {
+                smallViruses.remove(i);
+                shrinkSnake(1);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean smallVirusCanEnter(Point p, int ignoredIndex) {
+        // 蛇头允许进入，代表小病毒主动撞上蛇头；其余蛇身仍作为阻挡。
+        for (int i = 1; i < body.size(); i++) {
+            if (body.get(i).equals(p)) {
+                return false;
+            }
+        }
+        if (largeVirusAt(p) != null || foods.contains(p)
+                || (pigPos != null && pigPos.equals(p))) {
+            return false;
+        }
+        for (int i = 0; i < smallViruses.size(); i++) {
+            if (i != ignoredIndex && smallViruses.get(i).equals(p)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static long manhattan(Point a, Point b) {
+        return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
     }
 
     // ---- 猪头 ----
@@ -890,6 +1205,7 @@ public class GamePanel extends JPanel {
         updateOrigin();
         if (config.mode == GameConfig.Mode.ENDLESS && !gameOver
                 && getWidth() > 0 && getHeight() > 0) {
+            fillViruses();
             fillFoods();
         }
         if (!demo && !gameOver && !shopUnlocked && !pigDropped
@@ -940,6 +1256,7 @@ public class GamePanel extends JPanel {
             drawGrid(g2, custom);
         }
         drawFood(g2);
+        drawViruses(g2);
         drawPig(g2);
         drawSnake(g2);
         if (config.mode == GameConfig.Mode.CLASSIC) {
@@ -1034,6 +1351,15 @@ public class GamePanel extends JPanel {
         g2.setColor(skin.food);
         for (Point f : foods) {
             g2.fillOval(screenX(f) + 3, screenY(f) + 3, CELL - 6, CELL - 6);
+        }
+    }
+
+    private void drawViruses(Graphics2D g2) {
+        for (LargeVirus v : largeViruses) {
+            VirusArt.paint(g2, screenX(v.topLeft), screenY(v.topLeft), v.size * CELL, false);
+        }
+        for (Point p : smallViruses) {
+            VirusArt.paint(g2, screenX(p), screenY(p), CELL, true);
         }
     }
 
