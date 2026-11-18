@@ -65,6 +65,7 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
 
         dialoguePanel.setOnFinished(this::finishDialogue);
         shopPanel.setOnClose(this::closeShop);
+        shopPanel.setOnPurchased(this::refreshLabels);
 
         setLayout(new BorderLayout());
         buildStatusBar(skin);
@@ -238,7 +239,7 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
         shopOpen = true;
         panel.setPaused(true);
         root.setComponentZOrder(shopPanel, 0);
-        shopPanel.open(panel.length());
+        shopPanel.open(panel);
         focusShop();
     }
 
@@ -497,7 +498,7 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
         Achievements.Progress p = new Achievements.Progress();
         p.lastScore = score;
         p.lastLength = length;
-        p.maxLengthThisRun = config.maxLength;
+        p.maxLengthThisRun = panel.maxLength();
         p.lastClassic = classic;
         p.lastFilled = filled;
         p.gamesPlayed = store.gamesPlayed();
@@ -526,20 +527,13 @@ public final class GameScreen extends JPanel implements GamePanel.Listener {
         refreshLabels();
     }
 
-    /** 暂停菜单里的调速：立刻生效，不落盘（局内微调不该改掉玩家的默认设置）。 */
-    public void applyLiveSpeed(int tickMs) {
-        config.tickMs = tickMs;
-        panel.setTickInterval(tickMs);
-        refreshLabels();
-    }
-
     public void showToast(String text) {
         toast.show(this, text);
     }
 
     private void refreshLabels() {
         scoreLabel.setText("分数 " + panel.score());
-        lengthLabel.setText("长度 " + panel.length() + " / " + config.maxLength
+        lengthLabel.setText("长度 " + panel.length() + " / " + panel.maxLength()
                 + (panel.isFilled() ? "（已满）" : ""));
         modeLabel.setText(config.summary() + " · " + panel.skin().name);
         String hint = "方向键 / WASD 移动 · Esc 菜单 · 空格 暂停";

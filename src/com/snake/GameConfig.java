@@ -39,9 +39,8 @@ public final class GameConfig {
         }
     }
 
-    /** 速度档位，界面用固定档位而不是连续数值，方便命名与显示。 */
-    public static final int[] TICK_LEVELS = {200, 170, 140, 120, 100, 70};
-    public static final String[] TICK_NAMES = {"悠闲", "舒缓", "普通", "灵敏", "疾速", "狂飙"};
+    /** 速度不再开放设置，所有对局统一用这一档。 */
+    public static final int FIXED_TICK_MS = 120;
 
     public static final int MIN_COLS = 11;
     public static final int MAX_COLS = 45;
@@ -58,7 +57,7 @@ public final class GameConfig {
     public int rows = 25;
     /** 仅经典模式：撞到边界时从对面穿出。 */
     public boolean wrapWalls = false;
-    public int tickMs = 120;
+    public int tickMs = FIXED_TICK_MS;
     public int foodCount = 1;
     public int maxLength = 30;
     public Challenge challenge = Challenge.NONE;
@@ -85,9 +84,8 @@ public final class GameConfig {
         rows = clamp(rows, MIN_ROWS, MAX_ROWS);
         foodCount = clamp(foodCount, MIN_FOODS, MAX_FOODS);
         maxLength = clamp(maxLength, MIN_LENGTH, MAX_LENGTH_CAP);
-        if (speedIndexOf(tickMs) < 0) {
-            tickMs = 120;
-        }
+        // 旧存档、旧配置里可能还带着其它速度值，统一收敛到固定档位。
+        tickMs = FIXED_TICK_MS;
         if (mode == null) {
             mode = Mode.CLASSIC;
         }
@@ -95,29 +93,6 @@ public final class GameConfig {
             challenge = Challenge.NONE;
         }
         return this;
-    }
-
-    /** 找到 tickMs 所属档位下标，不属于任何档位时返回 -1。 */
-    public static int speedIndexOf(int tickMs) {
-        for (int i = 0; i < TICK_LEVELS.length; i++) {
-            if (TICK_LEVELS[i] == tickMs) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    public static int speedIndexOfOrDefault(int tickMs) {
-        int i = speedIndexOf(tickMs);
-        return i < 0 ? 3 : i;
-    }
-
-    public static int speedLabel(int tickMs) {
-        return speedIndexOfOrDefault(tickMs);
-    }
-
-    public static String speedName(int tickMs) {
-        return TICK_NAMES[speedLabel(tickMs)];
     }
 
     /** 一行摘要，用于挑战简介、存档按钮、暂停菜单与榜单记录。 */
@@ -135,7 +110,6 @@ public final class GameConfig {
         } else {
             sb.append(" · ").append(foodCount).append(" 食物");
         }
-        sb.append(" · ").append(speedName(tickMs));
         return sb.toString();
     }
 

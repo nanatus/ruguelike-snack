@@ -19,6 +19,7 @@ public final class ScoreRecord implements Comparable<ScoreRecord> {
     public final int rows;
     public final boolean wrapWalls;
     public final int foodCount;
+    /** 旧记录保留的速度字段，仅用于兼容历史序列化格式，不再展示。 */
     public final int tickMs;
     public final String skinName;
     public final GameConfig.Challenge challenge;
@@ -69,7 +70,6 @@ public final class ScoreRecord implements Comparable<ScoreRecord> {
         } else {
             sb.append(" · ").append(foodCount).append("食物");
         }
-        sb.append(" · ").append(GameConfig.speedName(tickMs));
         if (challenge != GameConfig.Challenge.NONE) {
             sb.append(" · ").append(challenge.label());
         }

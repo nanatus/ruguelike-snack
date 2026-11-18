@@ -19,7 +19,6 @@ import javax.swing.JCheckBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
-import javax.swing.JSlider;
 import javax.swing.SwingConstants;
 
 /**
@@ -28,7 +27,7 @@ import javax.swing.SwingConstants;
  * 为什么是「卡片」而不是整屏半透明按钮：棋盘本身的颜色很跳，
  * 半透明按钮压在上面等于没有对比度，卡片把棋盘挡掉一块才看得清。
  *
- * 布局：标题 / 分数 / 模式一行说明，下面一列等宽按钮，最下面是音效和速度。
+ * 布局：标题 / 分数 / 模式一行说明，下面一列等宽按钮，最下面是音效开关。
  * 所有坐标都在 {@link #doLayout()} 里算，不套 GridBag + BoxLayout：
  * 那两层嵌套会把按钮一起撑到最长文字的宽度（模式说明有三十多个字），
  * 按钮就被拉成一条条空板。
@@ -67,19 +66,13 @@ public final class PauseMenuPanel extends JPanel {
     private final UiKit.FlatButton quitAppBtn;
 
     private final JCheckBox soundBox = new JCheckBox("音效");
-    /** 左边慢右边快，滑块值就是 TICK_LEVELS 的下标。 */
-    private final JSlider speedSlider = new JSlider(
-            JSlider.HORIZONTAL, 0, GameConfig.TICK_LEVELS.length - 1, 3);
-    private final JLabel speedLabel = new JLabel("普通");
-    private final JLabel speedTitle = new JLabel("速度");
-    /** 音效和速度这一行整体定位，内部仍用 FlowLayout（尺寸给成 preferredSize，结果确定）。 */
+    /** 音效开关这一行整体定位，内部仍用 FlowLayout（尺寸给成 preferredSize，结果确定）。 */
     private final JPanel quick = new JPanel();
 
     private final UiKit.Nav nav = new UiKit.Nav();
     private final String[] modeText = new String[2];
     /** 局是否还在进行中；已结算完就只留「返回」和「退出程序」。 */
     private boolean live = true;
-    private boolean speedTuning;
 
     public PauseMenuPanel(GameScreen screen, Skin skin) {
         this.screen = screen;
@@ -135,8 +128,6 @@ public final class PauseMenuPanel extends JPanel {
         scoreLine.setFont(UiKit.font(15, Font.PLAIN));
         modeLine.setFont(UiKit.font(13, Font.PLAIN));
         keyHint.setFont(UiKit.font(12, Font.PLAIN));
-        speedTitle.setFont(UiKit.font(14, Font.PLAIN));
-        speedLabel.setFont(UiKit.font(14, Font.PLAIN));
 
         for (JComponent c : new JComponent[]{
                 infoLabel, scoreLine, modeLine, keyHint, resumeBtn, restartBtn,
@@ -146,22 +137,9 @@ public final class PauseMenuPanel extends JPanel {
 
         quick.setOpaque(false);
         quick.setLayout(new java.awt.FlowLayout(java.awt.FlowLayout.CENTER, 10, 0));
-        speedSlider.setPreferredSize(new Dimension(170, 24));
-        speedSlider.setMaximumSize(new Dimension(200, 28));
-        speedSlider.setFocusable(false);
         quick.add(soundBox);
-        quick.add(speedTitle);
-        quick.add(speedSlider);
-        quick.add(speedLabel);
 
         soundBox.addActionListener(e -> ConfigStore.get().setSoundOn(soundBox.isSelected()));
-        speedSlider.addChangeListener(e -> {
-            int ms = GameConfig.TICK_LEVELS[speedSlider.getValue()];
-            speedLabel.setText(GameConfig.speedName(ms));
-            if (speedTuning) {
-                screen.applyLiveSpeed(ms);
-            }
-        });
 
         for (UiKit.FlatButton b : allButtons()) {
             nav.add(b);
@@ -248,11 +226,6 @@ public final class PauseMenuPanel extends JPanel {
         modeLine.setText(modeText[0]);
         resumeBtn.setText("继续游戏");
 
-        int idx = GameConfig.speedIndexOfOrDefault(config.tickMs);
-        if (speedSlider.getValue() != idx) {
-            speedSlider.setValue(idx);
-        }
-        speedLabel.setText(GameConfig.speedName(config.tickMs));
         soundBox.setSelected(ConfigStore.get().soundOn());
 
         // 已结算完的这一局没有「继续」可言，但重开和回主菜单仍然要给，
@@ -267,10 +240,7 @@ public final class PauseMenuPanel extends JPanel {
         abandonBtn.setEnabled(live);
         settingsBtn.setEnabled(live);
         skinBtn.setEnabled(live);
-        speedSlider.setEnabled(live);
         soundBox.setEnabled(live);
-        // 局中调速要立刻生效（不落盘）；结算后滑块是灰的，这条路径也就走不到。
-        speedTuning = live;
 
         revalidate();
         repaint();
@@ -293,10 +263,6 @@ public final class PauseMenuPanel extends JPanel {
         modeLine.setForeground(s.textDim);
         keyHint.setForeground(s.textDim);
         soundBox.setForeground(s.text);
-        speedTitle.setForeground(s.textDim);
-        speedLabel.setForeground(s.text);
-        speedSlider.setForeground(s.accent);
-        speedSlider.setOpaque(false);
         UiKit.styleCheck(s, soundBox);
         for (UiKit.FlatButton b : allButtons()) {
             b.applySkin(s);

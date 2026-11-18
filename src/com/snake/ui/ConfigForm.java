@@ -19,7 +19,7 @@ import javax.swing.event.ChangeEvent;
 import javax.swing.event.ChangeListener;
 
 /**
- * 一局怎么打的设置：模式、棋盘大小、是否穿墙、速度、食物数量。
+ * 一局怎么打的设置：模式、棋盘大小、是否穿墙、食物数量。
  *
  * 设置对话框和开局设置页共用这一个组件，两处不会出现规则不一致。
  * 控件直接读写传入的 {@link GameConfig}，改动立刻反映到配置上。
@@ -46,10 +46,6 @@ public final class ConfigForm extends JPanel {
     private final JLabel sizeLabel = new JLabel();
     private final JCheckBox wrapBox = new JCheckBox("撞到边界从对面穿出（不勾选则撞墙结束）");
 
-    /** 左边慢右边快，滑块值就是 TICK_LEVELS 的下标。 */
-    private final JSlider speed = new JSlider(
-            JSlider.HORIZONTAL, 0, GameConfig.TICK_LEVELS.length - 1, 3);
-    private final JLabel speedLabel = new JLabel();
     private final JSlider foods = new JSlider(GameConfig.MIN_FOODS, GameConfig.MAX_FOODS, 1);
     private final FoodDots foodDots = new FoodDots();
     private final JLabel foodLabel = new JLabel();
@@ -116,7 +112,6 @@ public final class ConfigForm extends JPanel {
 
         add(UiKit.sectionTitle(skin, "玩法"));
         add(strut());
-        add(row(new JLabel("速度 "), slider(speed), gap(12), speedLabel));
         foodRow = row(new JLabel("同屏食物 "), slider(foods), gap(12), foodDots, gap(10), foodLabel);
         add(foodRow);
         add(row(new JLabel("长度上限 "), slider(maxLength), gap(12), maxLengthLabel));
@@ -146,15 +141,6 @@ public final class ConfigForm extends JPanel {
         ChangeListener writeCols = e -> writeSize();
         cols.addChangeListener(writeCols);
         rows.addChangeListener(writeCols);
-        speed.addChangeListener(e -> {
-            if (syncing) {
-                return;
-            }
-            int ms = GameConfig.TICK_LEVELS[speed.getValue()];
-            config.tickMs = ms;
-            speedLabel.setText(GameConfig.speedName(ms) + "（" + ms + " 毫秒/步）");
-            fireChanged();
-        });
         foods.addChangeListener(e -> {
             if (syncing) {
                 return;
@@ -225,7 +211,6 @@ public final class ConfigForm extends JPanel {
             rows.setValue(config.rows);
             customSize.setSelected(!matchesPreset(config.cols, config.rows));
             selectPresetItem(config.cols, config.rows);
-            speed.setValue(GameConfig.speedIndexOfOrDefault(config.tickMs));
             foods.setValue(config.foodCount);
             maxLength.setValue(config.maxLength);
             wrapBox.setSelected(config.wrapWalls);
@@ -233,7 +218,6 @@ public final class ConfigForm extends JPanel {
             syncing = false;
         }
         sizeLabel.setText("→ " + config.cols + " × " + config.rows + " 格");
-        speedLabel.setText(GameConfig.speedName(config.tickMs) + "（" + config.tickMs + " 毫秒/步）");
         foodDots.setCount(config.foodCount);
         foodLabel.setText(config.foodCount + " 个");
         syncEnabled();
@@ -301,10 +285,9 @@ public final class ConfigForm extends JPanel {
         UiKit.styleRadio(s, endlessBtn);
         UiKit.styleChecks(s, wrapBox, customSize);
         sizeLabel.setForeground(s.text);
-        speedLabel.setForeground(s.accent);
         foodLabel.setForeground(s.accent);
         maxLengthLabel.setForeground(s.textDim);
-        for (JSlider sl : new JSlider[]{speed, foods, maxLength, cols, rows}) {
+        for (JSlider sl : new JSlider[]{foods, maxLength, cols, rows}) {
             sl.setOpaque(false);
             sl.setForeground(s.accent);
             sl.setBackground(s.panelBg);

@@ -50,6 +50,16 @@ public class GamePanel extends JPanel {
     private static final int LARGE_VIRUS_SAFE_DISTANCE = 8;
     private static final int SMALL_VIRUS_SAFE_DISTANCE = 6;
     private static final int VIRUS_IMMUNITY_TICKS = 4;
+    /** 小病毒每两个蛇回合移动一次，任何蛇速下都严格是蛇速的一半。 */
+    private static final int SMALL_VIRUS_STEPS_PER_MOVE = 2;
+
+    /** 商店速度道具的步长与允许范围。 */
+    public static final int SPEED_STEP_MS = 10;
+    public static final int MIN_SPEED_MS = 30;
+    public static final int MAX_SPEED_MS = 500;
+    /** 商店扩容道具的步长与硬顶；设置界面里的基础上限仍然是 MAX_LENGTH_CAP。 */
+    public static final int MAX_LENGTH_STEP = 5;
+    public static final int MAX_LENGTH_HARD_CAP = 999;
 
     /**
      * 面板与外层窗口之间的回调。全部给默认实现，
@@ -112,6 +122,10 @@ public class GamePanel extends JPanel {
     /** 小病毒隔回合一动；virusTick 在 0 和 1 之间切换。 */
     private int virusTick;
     private int virusInvulnerableTicks;
+    /** 当前每步用时；商店购买会在这个局内值上加减，基础值仍是 120。 */
+    private int speedMs = GameConfig.FIXED_TICK_MS;
+    /** 本局商店买到的额外长度上限，重开/新局清零。 */
+    private int maxLengthBonus;
     private long startedAt = System.currentTimeMillis();
 
     private int originX;
@@ -132,7 +146,7 @@ public class GamePanel extends JPanel {
         this.background = background;
         setOpaque(true);
         setFocusable(true);
-        timer = new Timer(config.tickMs, e -> update());
+        timer = new Timer(speedMs, e -> update());
         setPreferredSize(computePreferredSize());
         reset();
         addKeyListener(new KeyAdapter() {
@@ -150,7 +164,9 @@ public class GamePanel extends JPanel {
         this.config = cfg.sanitize();
         this.skin = s;
         this.demo = false;
-        timer.setDelay(this.config.tickMs);
+        this.speedMs = this.config.tickMs;
+        this.maxLengthBonus = 0;
+        timer.setDelay(speedMs);
         setPreferredSize(computePreferredSize());
         reset();
         // 计时器必须在这里启动：调用方（GameScreen）只管发配置，
@@ -177,15 +193,6 @@ public class GamePanel extends JPanel {
         repaint();
     }
 
-    /** 暂停菜单里调速用：只改间隔，不重开局。 */
-    public void setTickInterval(int ms) {
-        if (GameConfig.speedIndexOf(ms) < 0) {
-            return;
-        }
-        config.tickMs = ms;
-        timer.setDelay(ms);
-    }
-
     private Dimension computePreferredSize() {
         if (config.mode == GameConfig.Mode.CLASSIC) {
             return new Dimension(config.cols * CELL + 40, config.rows * CELL + 40);
@@ -204,7 +211,18 @@ public class GamePanel extends JPanel {
     }
 
     public int maxLength() {
-        return config.maxLength;
+        long effective = (long) config.maxLength + maxLengthBonus;
+        return (int) Math.min(effective, MAX_LENGTH_HARD_CAP);
+    }
+
+    /** 当前每步用时（毫秒），商店购买加速/减速会即时改变它。 */
+    public int speedMs() {
+        return speedMs;
+    }
+
+    /** 本局商店买到的额外上限，重开/新局清零。 */
+    public int maxLengthBonus() {
+        return maxLengthBonus;
     }
 
     public boolean isGameOver() {
@@ -221,7 +239,7 @@ public class GamePanel extends JPanel {
     }
 
     public boolean isFilled() {
-        return body.size() >= config.maxLength;
+        return body.size() >= maxLength();
     }
 
     public boolean isShopUnlocked() {
@@ -234,6 +252,61 @@ public class GamePanel extends JPanel {
         pigDropped = true;
         pigPos = null;
         repaint();
+    }
+
+    /** 商店购买结果，界面据此决定提示文案。 */
+    public enum PurchaseResult {
+        OK,
+        NOT_ENOUGH_LENGTH,
+        SPEED_LIMIT,
+        LENGTH_LIMIT
+    }
+
+    /**
+     * 购买一件商品：先校验边界，再用蛇尾长度付款。
+     * 校验失败不扣长度；付款后至少保留 1 节，不会因为购物直接死亡。
+     */
+    public PurchaseResult buy(ShopItem item) {
+        if (item == null) {
+            return PurchaseResult.NOT_ENOUGH_LENGTH;
+        }
+        if (item == ShopItem.SPEED_UP && speedMs <= MIN_SPEED_MS) {
+            return PurchaseResult.SPEED_LIMIT;
+        }
+        if (item == ShopItem.SPEED_DOWN && speedMs >= MAX_SPEED_MS) {
+            return PurchaseResult.SPEED_LIMIT;
+        }
+        if (item == ShopItem.LENGTH_UP && maxLength() >= MAX_LENGTH_HARD_CAP) {
+            return PurchaseResult.LENGTH_LIMIT;
+        }
+        if (body.size() <= item.price) {
+            return PurchaseResult.NOT_ENOUGH_LENGTH;
+        }
+
+        for (int i = 0; i < item.price; i++) {
+            body.remove(body.size() - 1);
+        }
+        switch (item) {
+            case SPEED_UP:
+                speedMs = Math.max(MIN_SPEED_MS, speedMs - SPEED_STEP_MS);
+                timer.setDelay(speedMs);
+                break;
+            case SPEED_DOWN:
+                speedMs = Math.min(MAX_SPEED_MS, speedMs + SPEED_STEP_MS);
+                timer.setDelay(speedMs);
+                break;
+            default:
+                maxLengthBonus = Math.min(maxLengthBonus + MAX_LENGTH_STEP,
+                        MAX_LENGTH_HARD_CAP - config.maxLength);
+                if (config.mode == GameConfig.Mode.CLASSIC) {
+                    // 经典模式原先在上限处停止生成食物，扩容后要续上。
+                    fillFoods();
+                }
+                break;
+        }
+        notifyScore();
+        repaint();
+        return PurchaseResult.OK;
     }
 
     public Point pigPosition() {
@@ -315,6 +388,9 @@ public class GamePanel extends JPanel {
         shopUnlocked = false;
         virusTick = 0;
         virusInvulnerableTicks = 0;
+        speedMs = config.tickMs;
+        maxLengthBonus = 0;
+        timer.setDelay(speedMs);
         startedAt = System.currentTimeMillis();
         syncCamera();
         fillViruses();
@@ -328,7 +404,10 @@ public class GamePanel extends JPanel {
         config = s.config.sanitize();
         skin = s.skin();
         demo = false;
-        timer.setDelay(config.tickMs);
+        speedMs = GameConfig.clamp(s.speedMs, MIN_SPEED_MS, MAX_SPEED_MS);
+        maxLengthBonus = GameConfig.clamp(s.maxLengthBonus, 0,
+                MAX_LENGTH_HARD_CAP - config.maxLength);
+        timer.setDelay(speedMs);
         setPreferredSize(computePreferredSize());
 
         body.clear();
@@ -348,7 +427,7 @@ public class GamePanel extends JPanel {
         shopUnlocked = s.shopUnlocked;
         pigDropped = s.pigDropped;
         pigPos = s.pigPos;
-        virusTick = s.virusTick & 1;
+        virusTick = s.virusTick % SMALL_VIRUS_STEPS_PER_MOVE;
         virusInvulnerableTicks = Math.max(0, s.virusInvulnerableTicks);
         startedAt = s.startedAt;
         // 计时器要跑起来，但先暂停：玩家是从菜单点进来的，
@@ -376,7 +455,7 @@ public class GamePanel extends JPanel {
                 pigPos = null;
                 pigDropped = false;
             }
-            if (!pigDropped && body.size() >= config.maxLength) {
+            if (!pigDropped && body.size() >= maxLength()) {
                 dropPig();
             }
             keepPigInView();
@@ -401,6 +480,8 @@ public class GamePanel extends JPanel {
         s.smallViruses = new ArrayList<Point>(smallViruses);
         s.virusTick = virusTick;
         s.virusInvulnerableTicks = virusInvulnerableTicks;
+        s.speedMs = speedMs;
+        s.maxLengthBonus = maxLengthBonus;
         s.score = score;
         s.startedAt = startedAt;
         s.savedAt = System.currentTimeMillis();
@@ -505,7 +586,8 @@ public class GamePanel extends JPanel {
 
     private void step() {
         if (config.mode == GameConfig.Mode.ENDLESS) {
-            virusTick = 1 - virusTick;
+            // 小病毒按“两个蛇回合一动”计时，任何蛇速下都严格是蛇速的一半。
+            virusTick = (virusTick + 1) % SMALL_VIRUS_STEPS_PER_MOVE;
         }
         Point next = body.get(0).translate(dir);
         Point newHead = enterBoard(next);
@@ -543,7 +625,7 @@ public class GamePanel extends JPanel {
         if (growing) {
             foods.remove(newHead);
             score++;
-            if (body.size() > config.maxLength) {
+            if (body.size() > maxLength()) {
                 body.remove(body.size() - 1);
             }
             notifyScore();
@@ -581,7 +663,7 @@ public class GamePanel extends JPanel {
             fillFoods();
         }
         if (!demo && !shopUnlocked && !pigDropped
-                && body.size() >= config.maxLength) {
+                && body.size() >= maxLength()) {
             dropPig();
         }
         keepPigInView();
@@ -677,7 +759,7 @@ public class GamePanel extends JPanel {
             }
             return;
         }
-        while (foods.size() < config.foodCount && body.size() < config.maxLength) {
+        while (foods.size() < config.foodCount && body.size() < maxLength()) {
             if (!spawnFood()) {
                 break;
             }
@@ -1209,7 +1291,7 @@ public class GamePanel extends JPanel {
             fillFoods();
         }
         if (!demo && !gameOver && !shopUnlocked && !pigDropped
-                && body.size() >= config.maxLength) {
+                && body.size() >= maxLength()) {
             dropPig();
         }
         keepPigInView();

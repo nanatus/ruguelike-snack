@@ -32,6 +32,10 @@ public final class SaveState {
     /** 小病毒移动相位与病毒伤害免疫剩余回合。 */
     public int virusTick;
     public int virusInvulnerableTicks;
+    /** 本局当前每步用时（商店买过加速/减速后的值）。 */
+    public int speedMs = GameConfig.FIXED_TICK_MS;
+    /** 本局商店买到的额外长度上限，重开/新局清零。 */
+    public int maxLengthBonus;
     public int score;
     /** 本局开始的时刻，用于算存活时长。 */
     public long startedAt;
@@ -75,11 +79,17 @@ public final class SaveState {
                 + " · " + relativeTime(savedAt);
     }
 
+    /** 本局实际长度上限：配置基础上限 + 商店扩容，硬顶 999。 */
+    public int effectiveMaxLength() {
+        long sum = (long) config.maxLength + maxLengthBonus;
+        return (int) Math.min(sum, GamePanel.MAX_LENGTH_HARD_CAP);
+    }
+
     public String tooltip() {
         StringBuilder sb = new StringBuilder();
         sb.append(modeLabel()).append('\n');
         sb.append(config.summary()).append('\n');
-        sb.append("长度 ").append(body.size()).append(" / ").append(config.maxLength).append('\n');
+        sb.append("长度 ").append(body.size()).append(" / ").append(effectiveMaxLength()).append('\n');
         sb.append("皮肤 ").append(skin().name).append('\n');
         sb.append("本局时长 ").append(durationSec() / 60).append(" 分 ")
           .append(durationSec() % 60).append(" 秒\n");
@@ -138,6 +148,8 @@ public final class SaveState {
         sb.append("&sv=").append(points(smallViruses));
         sb.append("&vt=").append(virusTick);
         sb.append("&vi=").append(virusInvulnerableTicks);
+        sb.append("&spd=").append(speedMs);
+        sb.append("&mlb=").append(maxLengthBonus);
         return sb.toString();
     }
 
@@ -187,6 +199,10 @@ public final class SaveState {
             st.smallViruses = parsePoints(m.get("sv"));
             st.virusTick = parseNonNegative(m.get("vt"));
             st.virusInvulnerableTicks = parseNonNegative(m.get("vi"));
+            // 旧存档没有这两个字段：速度回落到固定基础值，扩容加成为 0。
+            st.speedMs = parseSpeed(m.get("spd"));
+            st.maxLengthBonus = Math.min(parseNonNegative(m.get("mlb")),
+                    Math.max(0, GamePanel.MAX_LENGTH_HARD_CAP - c.maxLength));
 
             // 存档写坏时不能返回一个半残状态，那会让恢复后的游戏直接崩。
             if (st.body.isEmpty()) {
@@ -255,6 +271,15 @@ public final class SaveState {
 
     private static int parseNonNegative(String s) {
         return s == null || s.isEmpty() ? 0 : Math.max(0, Integer.parseInt(s));
+    }
+
+    /** 商店速度只在 30～500ms 之间；缺失或越界都收敛到合法区间。 */
+    private static int parseSpeed(String s) {
+        if (s == null || s.isEmpty()) {
+            return GameConfig.FIXED_TICK_MS;
+        }
+        return GameConfig.clamp(Integer.parseInt(s),
+                GamePanel.MIN_SPEED_MS, GamePanel.MAX_SPEED_MS);
     }
 
     private static Point parsePoint(String s) {

@@ -47,8 +47,6 @@ public final class ChallengeFactory {
         c.cols = pick(r, EVEN_SIZES);
         c.rows = pick(r, EVEN_SIZES);
         c.wrapWalls = r.nextBoolean();
-        int speed = GameConfig.speedIndexOfOrDefault(base.tickMs);
-        c.tickMs = GameConfig.TICK_LEVELS[GameConfig.clamp(speed + r.nextInt(3) - 1, 0, 5)];
         c.foodCount = 1 + r.nextInt(Math.min(5, base.foodCount + 2));
         c.maxLength = GameConfig.clamp(base.maxLength, GameConfig.MIN_LENGTH, GameConfig.MAX_LENGTH_CAP);
         c.seed = System.nanoTime();
@@ -62,7 +60,6 @@ public final class ChallengeFactory {
         c.cols = pick(r, EVEN_SIZES);
         c.rows = pick(r, EVEN_SIZES);
         c.wrapWalls = r.nextInt(3) == 0;
-        c.tickMs = pick(r, GameConfig.TICK_LEVELS);
         c.foodCount = 1 + r.nextInt(5);
         c.maxLength = 20 + r.nextInt(21);
         return c.sanitize();
